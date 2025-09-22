@@ -32,8 +32,9 @@ if errorlevel 1 (
 echo ✅ 环境检查完成
 echo.
 
+REM 确保默认目录存在
 REM 获取用户输入
-set /p input_dir="请输入图片目录路径 (或直接回车使用当前目录): "
+set /p input_dir="请输入图片目录路径 (直接回车使用当前目录 .): "
 if "%input_dir%"=="" set input_dir=.
 
 echo.

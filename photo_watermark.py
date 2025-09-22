@@ -126,8 +126,8 @@ class PhotoWatermark:
             print(f"❌ 错误: 目录不存在 {input_dir}")
             return
         
-        # 创建输出目录
-        output_dir = input_path.parent / f"{input_path.name}_watermark"
+        # 创建输出目录（作为原目录的子目录）
+        output_dir = input_path / f"{input_path.name}_watermark"
         output_dir.mkdir(exist_ok=True)
         print(f"📁 输出目录: {output_dir}")
         
@@ -164,7 +164,7 @@ class PhotoWatermark:
 
 def main():
     parser = argparse.ArgumentParser(description='为图片添加基于EXIF拍摄时间的水印')
-    parser.add_argument('input_dir', help='输入图片目录路径')
+    parser.add_argument('input_dir', nargs='?', default='.', help='输入图片目录路径 (默认: 当前目录)')
     parser.add_argument('--font-size', type=int, default=24, help='字体大小 (默认: 24)')
     parser.add_argument('--color', default='white', help='水印颜色 (默认: white)')
     parser.add_argument('--position', 

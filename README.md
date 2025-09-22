@@ -30,7 +30,7 @@ python photo_watermark.py /path/to/image/directory --font-size 30 --color red --
 
 ### 参数说明
 
-- `input_dir`: 输入图片目录路径（必需）
+- `input_dir`: 输入图片目录路径（可选，默认为当前目录 `.`）
 - `--font-size`: 字体大小，默认24
 - `--color`: 水印颜色，默认white
 - `--position`: 水印位置，可选值：
