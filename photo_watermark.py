@@ -67,7 +67,9 @@ class PhotoWatermark:
         """为图片添加水印"""
         try:
             # 打开图片
-            with Image.open(image_path) as img:
+            with Image.open(image_path) as img: 
+                
+                     
                 # 转换为RGB模式（如果需要）
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
