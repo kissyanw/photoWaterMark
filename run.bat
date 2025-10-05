@@ -4,7 +4,7 @@ title 图片水印工具
 
 echo.
 echo ========================================
-echo           图片水印工具
+echo           图片水印工具 (GUI)
 echo ========================================
 echo.
 
@@ -32,29 +32,21 @@ if errorlevel 1 (
 echo ✅ 环境检查完成
 echo.
 
-REM 确保默认目录存在
-REM 获取用户输入
-set /p input_dir="请输入图片目录路径 (直接回车使用当前目录 .): "
-if "%input_dir%"=="" set input_dir=.
+echo 启动图形界面...
+python -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+    echo ❌ 未找到Tkinter，请安装带Tk的Python版本
+    pause
+    exit /b 1
+)
 
-echo.
-echo 可选设置 (直接回车使用默认值):
-set /p font_size="字体大小 (默认24): "
-if "%font_size%"=="" set font_size=24
+REM 拖拽依赖(可选)
+python -c "import tkinterdnd2" >nul 2>&1
+if errorlevel 1 (
+    echo ⚠️ 未安装 tkinterdnd2，将无法使用拖拽，但不影响功能
+)
 
-set /p color="水印颜色 (默认white): "
-if "%color%"=="" set color=white
-
-echo 位置选项: top-left, top-right, bottom-left, bottom-right, center
-set /p position="水印位置 (默认bottom-right): "
-if "%position%"=="" set position=bottom-right
-
-echo.
-echo 🚀 开始处理...
-echo.
-
-REM 运行程序
-python photo_watermark.py "%input_dir%" --font-size %font_size% --color %color% --position %position%
+python gui.py
 
 echo.
 echo 按任意键退出...
