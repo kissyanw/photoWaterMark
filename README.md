@@ -51,7 +51,7 @@ python photo_watermark.py /path/to/image/directory \
   --output-format png \
   --jpeg-quality 90 \
   --name-prefix wm_ --name-suffix _watermarked \
-  --resize-mode percent --resize-value 60
+  --resize-percent 60
 ```
 
 ### 参数说明
@@ -71,8 +71,10 @@ python photo_watermark.py /path/to/image/directory \
  - `--name-prefix`: 输出文件名前缀（默认空）
  - `--name-suffix`: 输出文件名后缀（默认空）
  - `--allow-export-to-input`: 允许导出到原目录（默认禁止）
- - `--resize-mode`: 缩放模式，可选 `width` | `height` | `percent`
- - `--resize-value`: 缩放值。`width/height` 传像素，`percent` 传百分比（如60表示60%）
+ - `--resize-width`: 输出宽度（像素，可与高度一起指定）
+ - `--resize-height`: 输出高度（像素，可与宽度一起指定）
+ - `--resize-percent`: 输出百分比（0-100）。提供宽/高/百分比任一即可；同时提供宽+高会按精确尺寸缩放
+ - 兼容旧参数：`--resize-mode` + `--resize-value`
 
 ## 输出
 
@@ -88,7 +90,16 @@ python photo_watermark.py .
 python photo_watermark.py /path/to/photos --color red --position center --font-size 32 --output-format jpeg --jpeg-quality 90
 
 # 调整尺寸到原图的60%，添加前缀与后缀
-python photo_watermark.py /path/to/photos --resize-mode percent --resize-value 60 --name-prefix wm_ --name-suffix _watermarked
+python photo_watermark.py /path/to/photos --resize-percent 60 --name-prefix wm_ --name-suffix _watermarked
+
+# 指定输出宽度与高度（拉伸到精确尺寸）
+python photo_watermark.py /path/to/photos --resize-width 1920 --resize-height 1080
+
+# 仅指定宽度（按等比计算高度）
+python photo_watermark.py /path/to/photos --resize-width 1920
+
+# 仅指定高度（按等比计算宽度）
+python photo_watermark.py /path/to/photos --resize-height 1080
 ```
 
 ## 注意事项

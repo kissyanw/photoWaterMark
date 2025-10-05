@@ -64,7 +64,9 @@ class PhotoWatermark:
             return (margin, margin)  # 默认左上角
     
     def add_watermark(self, image_path, output_path, font_size=24, color='white', position='bottom-right',
-                      output_format=None, jpeg_quality=95, resize_mode=None, resize_value=None):
+                      output_format=None, jpeg_quality=95,
+                      resize_mode=None, resize_value=None,
+                      resize_width=None, resize_height=None, resize_percent=None):
         """为图片添加水印并导出
 
         参数:
@@ -79,9 +81,13 @@ class PhotoWatermark:
                 # 记录是否含透明通道
                 has_alpha = (img.mode in ('RGBA', 'LA')) or ('transparency' in img.info)
 
-                # 尺寸调整
-                if resize_mode and resize_value:
-                    img = self.resize_image(img, resize_mode, resize_value)
+                # 尺寸调整（优先使用新参数，其次兼容旧模式）
+                img = self.apply_resize(img,
+                                        width=resize_width,
+                                        height=resize_height,
+                                        percent=resize_percent,
+                                        legacy_mode=resize_mode,
+                                        legacy_value=resize_value)
                 
                 # 创建绘图对象
                 # 若有透明通道，保证为 RGBA，便于在透明图层上绘制文本
@@ -129,7 +135,7 @@ class PhotoWatermark:
             print(f"✗ 处理图片失败 {os.path.basename(image_path)}: {e}")
     
     def resize_image(self, img, mode, value):
-        """按给定模式调整尺寸"""
+        """按给定模式调整尺寸（兼容旧参数）"""
         try:
             if mode == 'width':
                 target_w = int(value)
@@ -147,8 +153,42 @@ class PhotoWatermark:
                 target_w = max(1, int(w * scale))
                 target_h = max(1, int(h * scale))
                 return img.resize((target_w, target_h), Image.LANCZOS)
-            else:
+            return img
+        except Exception:
+            return img
+
+    def apply_resize(self, img, width=None, height=None, percent=None, legacy_mode=None, legacy_value=None):
+        """统一的尺寸调整入口。
+        优先使用 width/height/percent；未提供时回退到 legacy 模式。
+        当同时提供 width 和 height 时，按精确尺寸缩放；
+        仅提供 width 或 height 时，按等比计算另一个边；
+        仅提供 percent 时，按百分比缩放。
+        """
+        try:
+            if width or height or percent:
+                w, h = img.size
+                if width and height:
+                    tw = max(1, int(width))
+                    th = max(1, int(height))
+                    return img.resize((tw, th), Image.LANCZOS)
+                if width:
+                    tw = max(1, int(width))
+                    th = max(1, int(h * (tw / w)))
+                    return img.resize((tw, th), Image.LANCZOS)
+                if height:
+                    th = max(1, int(height))
+                    tw = max(1, int(w * (th / h)))
+                    return img.resize((tw, th), Image.LANCZOS)
+                if percent:
+                    scale = float(percent) / 100.0
+                    tw = max(1, int(w * scale))
+                    th = max(1, int(h * scale))
+                    return img.resize((tw, th), Image.LANCZOS)
                 return img
+            # 兼容旧参数
+            if legacy_mode and legacy_value:
+                return self.resize_image(img, legacy_mode, legacy_value)
+            return img
         except Exception:
             return img
 
@@ -173,7 +213,8 @@ class PhotoWatermark:
     def process_directory(self, input_dir, font_size=24, color='white', position='bottom-right',
                           output_dir=None, output_format=None, jpeg_quality=95,
                           name_prefix='', name_suffix='', forbid_export_to_input=True,
-                          resize_mode=None, resize_value=None):
+                          resize_mode=None, resize_value=None,
+                          resize_width=None, resize_height=None, resize_percent=None):
         """处理目录中的所有图片"""
         input_path = Path(input_dir)
         if not input_path.exists():
@@ -208,8 +249,10 @@ class PhotoWatermark:
         if output_format:
             print(f"💾 输出格式={output_format}")
         print(f"🧩 命名: prefix='{name_prefix}', suffix='{name_suffix}'")
-        if resize_mode and resize_value:
-            print(f"📐 缩放: 模式={resize_mode}, 值={resize_value}")
+        if any([resize_width, resize_height, resize_percent]):
+            print(f"📐 缩放: width={resize_width}, height={resize_height}, percent={resize_percent}")
+        elif resize_mode and resize_value:
+            print(f"📐 缩放(兼容旧): 模式={resize_mode}, 值={resize_value}")
         print("-" * 50)
         
         # 处理每个图片
@@ -230,6 +273,9 @@ class PhotoWatermark:
                     jpeg_quality=jpeg_quality,
                     resize_mode=resize_mode,
                     resize_value=resize_value,
+                    resize_width=resize_width,
+                    resize_height=resize_height,
+                    resize_percent=resize_percent,
                 )
                 success_count += 1
             except Exception as e:
@@ -241,7 +287,8 @@ class PhotoWatermark:
 
     def process_files(self, files, output_dir, font_size=24, color='white', position='bottom-right',
                       output_format=None, jpeg_quality=95, name_prefix='', name_suffix='',
-                      forbid_export_to_input=True, resize_mode=None, resize_value=None):
+                      forbid_export_to_input=True, resize_mode=None, resize_value=None,
+                      resize_width=None, resize_height=None, resize_percent=None):
         """处理一组指定文件（用于GUI批量导入）"""
         files = [Path(p) for p in files]
         if not files:
@@ -268,7 +315,8 @@ class PhotoWatermark:
                 self.add_watermark(
                     str(f), str(output_file), font_size, color, position,
                     output_format=output_format, jpeg_quality=jpeg_quality,
-                    resize_mode=resize_mode, resize_value=resize_value
+                    resize_mode=resize_mode, resize_value=resize_value,
+                    resize_width=resize_width, resize_height=resize_height, resize_percent=resize_percent
                 )
                 success_count += 1
             except Exception as e:
@@ -299,8 +347,13 @@ def main():
     parser.add_argument('--name-prefix', default='', help='输出文件名前缀 (默认: 空)')
     parser.add_argument('--name-suffix', default='', help='输出文件名后缀 (默认: 空)')
     parser.add_argument('--allow-export-to-input', action='store_true', help='允许导出到原文件夹 (默认: 禁止)')
-    parser.add_argument('--resize-mode', choices=['width', 'height', 'percent'], default=None, help='缩放模式')
-    parser.add_argument('--resize-value', default=None, help='缩放数值: 像素或百分比')
+    # 新的尺寸参数（推荐）
+    parser.add_argument('--resize-width', type=int, default=None, help='输出宽度（像素）')
+    parser.add_argument('--resize-height', type=int, default=None, help='输出高度（像素）')
+    parser.add_argument('--resize-percent', type=float, default=None, help='输出百分比（0-100）')
+    # 兼容旧参数
+    parser.add_argument('--resize-mode', choices=['width', 'height', 'percent'], default=None, help='缩放模式(兼容)')
+    parser.add_argument('--resize-value', default=None, help='缩放数值: 像素或百分比(兼容)')
     
     args = parser.parse_args()
     
@@ -321,6 +374,9 @@ def main():
         forbid_export_to_input=(not args.allow_export_to_input),
         resize_mode=args.resize_mode,
         resize_value=args.resize_value,
+        resize_width=args.resize_width,
+        resize_height=args.resize_height,
+        resize_percent=args.resize_percent,
     )
 
 

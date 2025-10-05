@@ -121,9 +121,23 @@ class WatermarkGUI:
         # 尺寸
         size_group = ttk.LabelFrame(right, text="尺寸缩放")
         size_group.pack(fill=tk.X, padx=10, pady=8)
+        # 新的尺寸输入：宽、高、百分比；兼容旧模式作为高级选项
+        dims = ttk.Frame(size_group); dims.pack(fill=tk.X, pady=4)
+        self.resize_w_var = tk.StringVar()
+        self.resize_h_var = tk.StringVar()
+        self.resize_p_var = tk.StringVar()
+        ttk.Label(dims, text="宽(px):").pack(side=tk.LEFT)
+        ttk.Entry(dims, textvariable=self.resize_w_var, width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Label(dims, text="高(px):").pack(side=tk.LEFT)
+        ttk.Entry(dims, textvariable=self.resize_h_var, width=8).pack(side=tk.LEFT, padx=4)
+        ttk.Label(dims, text="百分比(%):").pack(side=tk.LEFT)
+        ttk.Entry(dims, textvariable=self.resize_p_var, width=8).pack(side=tk.LEFT, padx=4)
+
+        adv = ttk.LabelFrame(size_group, text="高级(兼容旧参数)")
+        adv.pack(fill=tk.X, padx=0, pady=6)
         self.resize_mode_var = tk.StringVar(value="none")
         self.resize_value_var = tk.StringVar()
-        sr = ttk.Frame(size_group); sr.pack(fill=tk.X, pady=4)
+        sr = ttk.Frame(adv); sr.pack(fill=tk.X, pady=4)
         ttk.Label(sr, text="模式:").pack(side=tk.LEFT)
         ttk.Combobox(sr, textvariable=self.resize_mode_var, values=["none", "width", "height", "percent"], width=10, state="readonly").pack(side=tk.LEFT, padx=4)
         ttk.Label(sr, text="值:").pack(side=tk.LEFT)
@@ -289,6 +303,9 @@ class WatermarkGUI:
                     forbid_export_to_input=(not opts['allow_same_dir']),
                     resize_mode=opts['resize_mode'],
                     resize_value=opts['resize_value'],
+                    resize_width=opts['resize_width'],
+                    resize_height=opts['resize_height'],
+                    resize_percent=opts['resize_percent'],
                 )
                 self.status_var.set("处理完成")
                 messagebox.showinfo("完成", "导出完成！")
@@ -306,6 +323,16 @@ class WatermarkGUI:
         if resize_mode == 'none':
             resize_mode = None
         resize_value = self.resize_value_var.get().strip() or None
+        # 新输入
+        rw = self.resize_w_var.get().strip()
+        rh = self.resize_h_var.get().strip()
+        rp = self.resize_p_var.get().strip()
+        rw_i = int(rw) if rw.isdigit() else None
+        rh_i = int(rh) if rh.isdigit() else None
+        try:
+            rp_f = float(rp) if rp else None
+        except Exception:
+            rp_f = None
         return {
             'output_dir': self.output_dir_var.get().strip(),
             'allow_same_dir': bool(self.allow_same_dir_var.get()),
@@ -315,6 +342,9 @@ class WatermarkGUI:
             'name_suffix': self.suffix_var.get(),
             'resize_mode': resize_mode,
             'resize_value': resize_value,
+            'resize_width': rw_i,
+            'resize_height': rh_i,
+            'resize_percent': rp_f,
             'font_size': int(self.font_size_var.get()),
             'color': self.color_var.get().strip() or 'white',
             'position': self.position_var.get(),
