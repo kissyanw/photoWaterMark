@@ -9,7 +9,7 @@ import os
 import sys
 import argparse
 from datetime import datetime
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageColor
 import piexif
 from pathlib import Path
 
@@ -65,8 +65,11 @@ class PhotoWatermark:
     
     def add_watermark(self, image_path, output_path, font_size=24, color='white', position='bottom-right',
                       output_format=None, jpeg_quality=95,
-                      resize_mode=None, resize_value=None,
-                      resize_width=None, resize_height=None, resize_percent=None):
+                      resize_width=None, resize_height=None, resize_percent=None,
+                      text_content=None, text_color='white', text_opacity=100,
+                      font_path=None, text_stroke_width=0, text_stroke_color='black',
+                      text_shadow=False, text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
+                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
         """为图片添加水印并导出
 
         参数:
@@ -85,9 +88,7 @@ class PhotoWatermark:
                 img = self.apply_resize(img,
                                         width=resize_width,
                                         height=resize_height,
-                                        percent=resize_percent,
-                                        legacy_mode=resize_mode,
-                                        legacy_value=resize_value)
+                                        percent=resize_percent)
                 
                 # 创建绘图对象
                 # 若有透明通道，保证为 RGBA，便于在透明图层上绘制文本
@@ -99,22 +100,38 @@ class PhotoWatermark:
                         img = img.convert('RGB')
                 draw = ImageDraw.Draw(img)
                 
-                # 获取水印文本
-                watermark_text = self.get_watermark_text(image_path)
-                
-                # 尝试加载字体
-                font = self.get_font(font_size)
-                
-                # 获取文本尺寸
-                bbox = draw.textbbox((0, 0), watermark_text, font=font)
-                text_width = bbox[2] - bbox[0]
-                text_height = bbox[3] - bbox[1]
-                
-                # 计算位置
-                x, y = self.calculate_position(img.width, img.height, text_width, text_height, position)
-                
-                # 绘制文本
-                draw.text((x, y), watermark_text, fill=color, font=font)
+                # 1) 默认始终添加 EXIF 时间文本（使用基本样式: color/font_size/无描边阴影）
+                exif_text = self.get_watermark_text(image_path)
+                base_font = self.get_font(font_size)
+                bbox = draw.textbbox((0, 0), exif_text, font=base_font)
+                tw = bbox[2] - bbox[0]
+                th = bbox[3] - bbox[1]
+                bx, by = self.calculate_position(img.width, img.height, tw, th, position)
+                draw.text((bx, by), exif_text, fill=color, font=base_font)
+
+                # 2) 可选：自定义文本水印
+                if text_content:
+                    cfont = self.get_font(font_size) if not font_path else self.load_font(font_path, font_size)
+                    cbbox = draw.textbbox((0, 0), text_content, font=cfont, stroke_width=max(0, int(text_stroke_width)))
+                    ctw = cbbox[2] - cbbox[0]
+                    cth = cbbox[3] - cbbox[1]
+                    cx, cy = self.calculate_position(img.width, img.height, ctw, cth, position)
+                    self.draw_text_with_style(img, (cx, cy), text_content, cfont,
+                                              fill_color=text_color, opacity=text_opacity,
+                                              stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                                              shadow=text_shadow, shadow_offset=text_shadow_offset,
+                                              shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity)
+
+                # 3) 可选：图片水印
+                if logo_path:
+                    wm_img = self.prepare_logo(logo_path, logo_scale_percent, logo_width, logo_height, logo_opacity)
+                    if wm_img is None:
+                        raise ValueError('无法加载图片水印')
+                    wm_w, wm_h = wm_img.size
+                    lx, ly = self.calculate_position(img.width, img.height, wm_w, wm_h, position)
+                    if img.mode != 'RGBA':
+                        img = img.convert('RGBA')
+                    img.alpha_composite(wm_img, dest=(lx, ly))
                 
                 # 保存图片
                 fmt = (output_format or Path(output_path).suffix.lstrip('.')).lower()
@@ -130,36 +147,14 @@ class PhotoWatermark:
                     # 回退到原Pillow推断
                     img.save(output_path)
                 print(f"✓ 已处理: {os.path.basename(image_path)} -> {os.path.basename(output_path)}")
+                return True
                 
         except Exception as e:
             print(f"✗ 处理图片失败 {os.path.basename(image_path)}: {e}")
+            return False
     
-    def resize_image(self, img, mode, value):
-        """按给定模式调整尺寸（兼容旧参数）"""
-        try:
-            if mode == 'width':
-                target_w = int(value)
-                w, h = img.size
-                target_h = max(1, int(h * (target_w / w)))
-                return img.resize((target_w, target_h), Image.LANCZOS)
-            elif mode == 'height':
-                target_h = int(value)
-                w, h = img.size
-                target_w = max(1, int(w * (target_h / h)))
-                return img.resize((target_w, target_h), Image.LANCZOS)
-            elif mode == 'percent':
-                scale = float(value) / 100.0
-                w, h = img.size
-                target_w = max(1, int(w * scale))
-                target_h = max(1, int(h * scale))
-                return img.resize((target_w, target_h), Image.LANCZOS)
-            return img
-        except Exception:
-            return img
-
-    def apply_resize(self, img, width=None, height=None, percent=None, legacy_mode=None, legacy_value=None):
+    def apply_resize(self, img, width=None, height=None, percent=None):
         """统一的尺寸调整入口。
-        优先使用 width/height/percent；未提供时回退到 legacy 模式。
         当同时提供 width 和 height 时，按精确尺寸缩放；
         仅提供 width 或 height 时，按等比计算另一个边；
         仅提供 percent 时，按百分比缩放。
@@ -185,9 +180,6 @@ class PhotoWatermark:
                     th = max(1, int(h * scale))
                     return img.resize((tw, th), Image.LANCZOS)
                 return img
-            # 兼容旧参数
-            if legacy_mode and legacy_value:
-                return self.resize_image(img, legacy_mode, legacy_value)
             return img
         except Exception:
             return img
@@ -209,12 +201,91 @@ class PhotoWatermark:
         
         # 如果所有字体都加载失败，使用默认字体
         return ImageFont.load_default()
+
+    def load_font(self, font_path, font_size):
+        try:
+            return ImageFont.truetype(font_path, font_size)
+        except Exception:
+            return self.get_font(font_size)
+
+    def _parse_color_with_opacity(self, color_str, opacity_percent, fallback='white'):
+        try:
+            opacity = max(0, min(100, int(opacity_percent)))
+        except Exception:
+            opacity = 100
+        try:
+            rgb = ImageColor.getrgb(color_str)
+        except Exception:
+            rgb = (255, 255, 255) if fallback == 'white' else (0, 0, 0)
+        a = int(round(opacity / 100.0 * 255))
+        return (*rgb, a)
+
+    def draw_text_with_style(self, img, xy, text, font, fill_color='white', opacity=100,
+                              stroke_width=0, stroke_color='black', shadow=False,
+                              shadow_offset=2, shadow_color='black', shadow_opacity=60):
+        # 确保RGBA以便处理透明度
+        if img.mode != 'RGBA':
+            base_img = img.convert('RGBA')
+        else:
+            base_img = img
+        text_layer = Image.new('RGBA', base_img.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(text_layer)
+
+        # 阴影
+        if shadow:
+            shadow_rgba = self._parse_color_with_opacity(shadow_color, shadow_opacity, fallback='black')
+            sx = xy[0] + int(shadow_offset)
+            sy = xy[1] + int(shadow_offset)
+            d.text((sx, sy), text, font=font, fill=shadow_rgba, stroke_width=int(stroke_width), stroke_fill=shadow_rgba)
+
+        # 主文本
+        fill_rgba = self._parse_color_with_opacity(fill_color, opacity, fallback='white')
+        d.text(xy, text, font=font, fill=fill_rgba, stroke_width=int(stroke_width), stroke_fill=stroke_color)
+
+        base_img.alpha_composite(text_layer)
+        if img is not base_img:
+            img.paste(base_img)
+
+    def prepare_logo(self, logo_path, scale_percent=None, width=None, height=None, opacity=100):
+        try:
+            logo = Image.open(logo_path)
+            if logo.mode != 'RGBA':
+                logo = logo.convert('RGBA')
+            lw, lh = logo.size
+            # 尺寸
+            if width and height:
+                logo = logo.resize((int(width), int(height)), Image.LANCZOS)
+            elif width:
+                tw = int(width)
+                th = max(1, int(lh * (tw / lw)))
+                logo = logo.resize((tw, th), Image.LANCZOS)
+            elif height:
+                th = int(height)
+                tw = max(1, int(lw * (th / lh)))
+                logo = logo.resize((tw, th), Image.LANCZOS)
+            elif scale_percent:
+                scale = float(scale_percent) / 100.0
+                tw = max(1, int(lw * scale))
+                th = max(1, int(lh * scale))
+                logo = logo.resize((tw, th), Image.LANCZOS)
+
+            # 透明度
+            a = max(0, min(100, int(opacity)))
+            alpha = logo.split()[-1]
+            alpha = alpha.point(lambda p: int(p * (a / 100.0)))
+            logo.putalpha(alpha)
+            return logo
+        except Exception:
+            return None
     
     def process_directory(self, input_dir, font_size=24, color='white', position='bottom-right',
                           output_dir=None, output_format=None, jpeg_quality=95,
                           name_prefix='', name_suffix='', forbid_export_to_input=True,
-                          resize_mode=None, resize_value=None,
-                          resize_width=None, resize_height=None, resize_percent=None):
+                          resize_width=None, resize_height=None, resize_percent=None,
+                          text_content=None, text_color='white', text_opacity=100,
+                          font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
+                          text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
+                          logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
         """处理目录中的所有图片"""
         input_path = Path(input_dir)
         if not input_path.exists():
@@ -251,8 +322,6 @@ class PhotoWatermark:
         print(f"🧩 命名: prefix='{name_prefix}', suffix='{name_suffix}'")
         if any([resize_width, resize_height, resize_percent]):
             print(f"📐 缩放: width={resize_width}, height={resize_height}, percent={resize_percent}")
-        elif resize_mode and resize_value:
-            print(f"📐 缩放(兼容旧): 模式={resize_mode}, 值={resize_value}")
         print("-" * 50)
         
         # 处理每个图片
@@ -263,7 +332,7 @@ class PhotoWatermark:
                 image_file.name, name_prefix, name_suffix, output_format
             )
             try:
-                self.add_watermark(
+                ok = self.add_watermark(
                     str(image_file),
                     str(output_file),
                     font_size,
@@ -271,13 +340,27 @@ class PhotoWatermark:
                     position,
                     output_format=output_format,
                     jpeg_quality=jpeg_quality,
-                    resize_mode=resize_mode,
-                    resize_value=resize_value,
                     resize_width=resize_width,
                     resize_height=resize_height,
                     resize_percent=resize_percent,
+                    text_content=text_content,
+                    text_color=text_color,
+                    text_opacity=text_opacity,
+                    font_path=font_path,
+                    text_stroke_width=text_stroke_width,
+                    text_stroke_color=text_stroke_color,
+                    text_shadow=text_shadow,
+                    text_shadow_offset=text_shadow_offset,
+                    text_shadow_color=text_shadow_color,
+                    text_shadow_opacity=text_shadow_opacity,
+                    logo_path=logo_path,
+                    logo_scale_percent=logo_scale_percent,
+                    logo_width=logo_width,
+                    logo_height=logo_height,
+                    logo_opacity=logo_opacity,
                 )
-                success_count += 1
+                if ok:
+                    success_count += 1
             except Exception as e:
                 print(f"✗ 处理失败: {e}")
         
@@ -287,8 +370,12 @@ class PhotoWatermark:
 
     def process_files(self, files, output_dir, font_size=24, color='white', position='bottom-right',
                       output_format=None, jpeg_quality=95, name_prefix='', name_suffix='',
-                      forbid_export_to_input=True, resize_mode=None, resize_value=None,
-                      resize_width=None, resize_height=None, resize_percent=None):
+                      forbid_export_to_input=True,
+                      resize_width=None, resize_height=None, resize_percent=None,
+                      text_content=None, text_color='white', text_opacity=100,
+                      font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
+                      text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
+                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
         """处理一组指定文件（用于GUI批量导入）"""
         files = [Path(p) for p in files]
         if not files:
@@ -312,13 +399,28 @@ class PhotoWatermark:
                 f.name, name_prefix, name_suffix, output_format
             )
             try:
-                self.add_watermark(
+                ok = self.add_watermark(
                     str(f), str(output_file), font_size, color, position,
                     output_format=output_format, jpeg_quality=jpeg_quality,
-                    resize_mode=resize_mode, resize_value=resize_value,
-                    resize_width=resize_width, resize_height=resize_height, resize_percent=resize_percent
+                    resize_width=resize_width, resize_height=resize_height, resize_percent=resize_percent,
+                    text_content=text_content,
+                    text_color=text_color,
+                    text_opacity=text_opacity,
+                    font_path=font_path,
+                    text_stroke_width=text_stroke_width,
+                    text_stroke_color=text_stroke_color,
+                    text_shadow=text_shadow,
+                    text_shadow_offset=text_shadow_offset,
+                    text_shadow_color=text_shadow_color,
+                    text_shadow_opacity=text_shadow_opacity,
+                    logo_path=logo_path,
+                    logo_scale_percent=logo_scale_percent,
+                    logo_width=logo_width,
+                    logo_height=logo_height,
+                    logo_opacity=logo_opacity,
                 )
-                success_count += 1
+                if ok:
+                    success_count += 1
             except Exception as e:
                 print(f"✗ 处理失败 {f.name}: {e}")
         print("-" * 50)
@@ -333,7 +435,7 @@ class PhotoWatermark:
 
 
 def main():
-    parser = argparse.ArgumentParser(description='为图片添加基于EXIF拍摄时间的水印')
+    parser = argparse.ArgumentParser(description='为图片添加水印（默认添加EXIF时间；可选添加自定义文本与图片Logo）')
     parser.add_argument('input_dir', nargs='?', default='.', help='输入图片目录路径 (默认: 当前目录)')
     parser.add_argument('--font-size', type=int, default=24, help='字体大小 (默认: 24)')
     parser.add_argument('--color', default='white', help='水印颜色 (默认: white)')
@@ -344,16 +446,29 @@ def main():
     parser.add_argument('--output-dir', default=None, help='输出目录 (默认: 原目录下 *_watermark)')
     parser.add_argument('--output-format', choices=['jpeg', 'png'], default=None, help='输出格式 (可选: jpeg 或 png)')
     parser.add_argument('--jpeg-quality', type=int, default=95, help='JPEG质量 0-100 (默认:95)')
+    # 水印样式（默认总是添加EXIF文本；可另外添加自定义文本与Logo）
+    parser.add_argument('--text-content', default=None, help='自定义文本内容')
+    parser.add_argument('--text-color', default='white', help='文本颜色')
+    parser.add_argument('--text-opacity', type=int, default=100, help='文本不透明度(0-100)')
+    parser.add_argument('--font-path', default=None, help='字体文件路径(.ttf/.otf)')
+    parser.add_argument('--text-stroke-width', type=int, default=0, help='文本描边宽度')
+    parser.add_argument('--text-stroke-color', default='black', help='文本描边颜色')
+    parser.add_argument('--text-shadow', action='store_true', help='启用文本阴影')
+    parser.add_argument('--text-shadow-offset', type=int, default=2, help='文本阴影偏移像素')
+    parser.add_argument('--text-shadow-color', default='black', help='文本阴影颜色')
+    parser.add_argument('--text-shadow-opacity', type=int, default=60, help='文本阴影不透明度(0-100)')
+    parser.add_argument('--logo-path', default=None, help='图片水印(Logo)路径(PNG支持透明)')
+    parser.add_argument('--logo-scale-percent', type=float, default=None, help='按百分比缩放Logo')
+    parser.add_argument('--logo-width', type=int, default=None, help='Logo目标宽度')
+    parser.add_argument('--logo-height', type=int, default=None, help='Logo目标高度')
+    parser.add_argument('--logo-opacity', type=int, default=100, help='Logo不透明度(0-100)')
     parser.add_argument('--name-prefix', default='', help='输出文件名前缀 (默认: 空)')
     parser.add_argument('--name-suffix', default='', help='输出文件名后缀 (默认: 空)')
     parser.add_argument('--allow-export-to-input', action='store_true', help='允许导出到原文件夹 (默认: 禁止)')
-    # 新的尺寸参数（推荐）
+    # 尺寸参数
     parser.add_argument('--resize-width', type=int, default=None, help='输出宽度（像素）')
     parser.add_argument('--resize-height', type=int, default=None, help='输出高度（像素）')
     parser.add_argument('--resize-percent', type=float, default=None, help='输出百分比（0-100）')
-    # 兼容旧参数
-    parser.add_argument('--resize-mode', choices=['width', 'height', 'percent'], default=None, help='缩放模式(兼容)')
-    parser.add_argument('--resize-value', default=None, help='缩放数值: 像素或百分比(兼容)')
     
     args = parser.parse_args()
     
@@ -372,11 +487,24 @@ def main():
         name_prefix=args.name_prefix,
         name_suffix=args.name_suffix,
         forbid_export_to_input=(not args.allow_export_to_input),
-        resize_mode=args.resize_mode,
-        resize_value=args.resize_value,
         resize_width=args.resize_width,
         resize_height=args.resize_height,
         resize_percent=args.resize_percent,
+        text_content=args.text_content,
+        text_color=args.text_color,
+        text_opacity=args.text_opacity,
+        font_path=args.font_path,
+        text_stroke_width=args.text_stroke_width,
+        text_stroke_color=args.text_stroke_color,
+        text_shadow=args.text_shadow,
+        text_shadow_offset=args.text_shadow_offset,
+        text_shadow_color=args.text_shadow_color,
+        text_shadow_opacity=args.text_shadow_opacity,
+        logo_path=args.logo_path,
+        logo_scale_percent=args.logo_scale_percent,
+        logo_width=args.logo_width,
+        logo_height=args.logo_height,
+        logo_opacity=args.logo_opacity,
     )
 
 

@@ -11,6 +11,10 @@
 - 自动创建输出目录
  - 可选择输出为 JPEG 或 PNG，支持 JPEG 质量调节
  - 支持导出重命名（前缀/后缀）与尺寸缩放（按宽/高/百分比）
+- 水印：
+  - 默认添加 EXIF 时间文本
+  - 可选添加“自定义文本”（字体/颜色/透明度/描边/阴影）
+  - 可选添加“图片水印”(Logo，PNG 透明)，支持缩放（百分比/宽/高）与透明度
 
 ## 安装依赖
 
@@ -51,7 +55,13 @@ python photo_watermark.py /path/to/image/directory \
   --output-format png \
   --jpeg-quality 90 \
   --name-prefix wm_ --name-suffix _watermarked \
-  --resize-percent 60
+  --resize-percent 60 \
+  --text-content "我的水印" \
+  --text-color "#ffffff" --text-opacity 80 --text-stroke-width 2 --text-stroke-color "#000000" --text-shadow --text-shadow-offset 2
+# 图片水印 (Logo)（在 EXIF 文本之外叠加 Logo）
+python photo_watermark.py /path/to/photos \
+  --logo-path /path/to/logo.png \
+  --logo-scale-percent 30 --logo-opacity 70
 ```
 
 ### 参数说明
@@ -71,10 +81,9 @@ python photo_watermark.py /path/to/image/directory \
  - `--name-prefix`: 输出文件名前缀（默认空）
  - `--name-suffix`: 输出文件名后缀（默认空）
  - `--allow-export-to-input`: 允许导出到原目录（默认禁止）
- - `--resize-width`: 输出宽度（像素，可与高度一起指定）
- - `--resize-height`: 输出高度（像素，可与宽度一起指定）
- - `--resize-percent`: 输出百分比（0-100）。提供宽/高/百分比任一即可；同时提供宽+高会按精确尺寸缩放
- - 兼容旧参数：`--resize-mode` + `--resize-value`
+- `--resize-width`: 输出宽度（像素，可与高度一起指定）
+- `--resize-height`: 输出高度（像素，可与宽度一起指定）
+- `--resize-percent`: 输出百分比（0-100）。提供宽/高/百分比任一即可；同时提供宽+高会按精确尺寸缩放
 
 ## 输出
 
