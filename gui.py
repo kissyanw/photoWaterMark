@@ -49,7 +49,7 @@ class WatermarkGUI:
 
         hint = ttk.Label(left, text=(
             "将图片或文件夹拖拽到此区域，或使用下方按钮添加\n"
-            f"支持格式：{', '.join(sorted(e.upper().lstrip('.')) for e in SUPPORTED_EXTS)}"
+            f"支持格式：{', '.join(sorted(e.upper().lstrip('.') for e in SUPPORTED_EXTS))}"
         ))
         hint.pack(pady=8)
 
@@ -99,11 +99,12 @@ class WatermarkGUI:
         q_row.pack(fill=tk.X, pady=4)
         ttk.Label(q_row, text="JPEG质量:").pack(side=tk.LEFT)
         self.quality_var = tk.IntVar(value=95)
+        # 先创建label，再绑定scale，避免回调在label未就绪时报错
+        self.quality_label = ttk.Label(q_row, text="95")
+        self.quality_label.pack(side=tk.LEFT)
         self.quality_scale = ttk.Scale(q_row, from_=0, to=100, orient=tk.HORIZONTAL, command=self._on_quality_change)
         self.quality_scale.set(95)
         self.quality_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
-        self.quality_label = ttk.Label(q_row, text="95")
-        self.quality_label.pack(side=tk.LEFT)
 
         # 命名
         name_group = ttk.LabelFrame(right, text="命名规则")
@@ -253,7 +254,11 @@ class WatermarkGUI:
             self.output_dir_var.set(path)
 
     def _on_quality_change(self, value):
-        self.quality_label.config(text=str(int(float(value))))
+        try:
+            if hasattr(self, 'quality_label') and self.quality_label:
+                self.quality_label.config(text=str(int(float(value))))
+        except Exception:
+            pass
 
     def start_export(self):
         if not self.files:

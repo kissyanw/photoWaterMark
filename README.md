@@ -18,11 +18,15 @@
 pip install -r requirements.txt
 ```
 
-可选：如需在 GUI 中使用拖拽导入，请安装：
+说明：已在 `requirements.txt` 中包含 `tkinterdnd2`（用于 GUI 拖拽）。执行 `pip install -r requirements.txt` 会一并安装。
 
-```bash
-pip install tkinterdnd2
-```
+### Python 环境要求
+
+- 推荐使用官方 Windows 安装包（含 Tk）或 Microsoft Store 的 Python 3.10+；已在 Python 3.13 上验证。
+- 必须包含 Tk 组件（用于 GUI）。验证方式：
+  - 终端执行 `py -c "import tkinter; print('ok')"` 若输出 ok 即可。
+- 建议安装 Python Launcher（`py`）并用它运行脚本；`run.bat` 会优先使用 `py`，找不到再回退到 `python`。
+- 如果 `python` 不在 PATH 中也没关系，`py` 可用即可。
 
 ## 使用方法
 
