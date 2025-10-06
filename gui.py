@@ -31,12 +31,25 @@ class WatermarkGUI:
         self.root = (TkinterDnD.Tk() if DND_AVAILABLE else tk.Tk())
         self.root.title("图片水印工具 - GUI")
         self.root.geometry("980x640")
+        # 配置文件路径
+        self._templates_path = Path(__file__).with_name("templates.json")
+        self._last_settings_path = Path(__file__).with_name("last_settings.json")
 
         self.files = []  # 存储文件的绝对路径
         self.thumbnails = {}  # 防止被GC: path -> PhotoImage
 
         self._build_layout()
         self._bind_dnd_if_available()
+        # 尝试加载上次设置或默认模板
+        try:
+            self._load_last_settings_or_default()
+        except Exception:
+            pass
+        # 关闭时保存当前设置
+        try:
+            self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        except Exception:
+            pass
 
     def _build_layout(self):
         # 使用可分割面板，左右可拖拽调整
@@ -300,6 +313,22 @@ class WatermarkGUI:
         self.status_var = tk.StringVar(value="就绪")
         ttk.Label(right, textvariable=self.status_var).pack(anchor=tk.W, padx=12)
 
+        # 模板管理
+        tpl_group = ttk.LabelFrame(right, text="模板管理")
+        tpl_group.pack(fill=tk.X, padx=10, pady=8)
+        tpl_row1 = ttk.Frame(tpl_group); tpl_row1.pack(fill=tk.X, pady=4)
+        ttk.Label(tpl_row1, text="模板:").pack(side=tk.LEFT)
+        self.template_choice_var = tk.StringVar()
+        self.template_combo = ttk.Combobox(tpl_row1, textvariable=self.template_choice_var, state="readonly", width=22)
+        self.template_combo.pack(side=tk.LEFT, padx=4)
+        ttk.Button(tpl_row1, text="加载", command=self._load_selected_template).pack(side=tk.LEFT, padx=2)
+        tpl_row2 = ttk.Frame(tpl_group); tpl_row2.pack(fill=tk.X, pady=4)
+        ttk.Button(tpl_row2, text="保存为模板", command=self._save_as_template).pack(side=tk.LEFT)
+        ttk.Button(tpl_row2, text="删除", command=self._delete_selected_template).pack(side=tk.LEFT, padx=6)
+        ttk.Button(tpl_row2, text="设为默认", command=self._set_default_template).pack(side=tk.LEFT)
+        # 初始化模板下拉
+        self._refresh_template_combo()
+
         # 绑定值变化实时预览
         self._bind_live_updates()
         # 窗口尺寸变化时重绘预览
@@ -339,6 +368,126 @@ class WatermarkGUI:
         # 在左侧Canvas区域绑定拖拽
         self.canvas.drop_target_register(DND_FILES)
         self.canvas.dnd_bind('<<Drop>>', self._on_drop)
+
+    # ------- 模板持久化 -------
+    def _read_templates_store(self):
+        try:
+            if self._templates_path.exists():
+                import json
+                with open(self._templates_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, dict) and 'templates' in data:
+                    return data
+        except Exception:
+            pass
+        return {"default": None, "templates": {}}
+
+    def _write_templates_store(self, data):
+        try:
+            import json
+            with open(self._templates_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _refresh_template_combo(self):
+        store = self._read_templates_store()
+        names = sorted(list(store.get('templates', {}).keys()))
+        self.template_combo['values'] = names
+        # 若存在默认模板，选中默认
+        default_name = store.get('default')
+        if default_name in names:
+            self.template_choice_var.set(default_name)
+        elif names:
+            self.template_choice_var.set(names[0])
+        else:
+            self.template_choice_var.set("")
+
+    def _save_as_template(self):
+        try:
+            from tkinter import simpledialog
+            name = simpledialog.askstring("保存为模板", "请输入模板名称:", parent=self.root)
+        except Exception:
+            name = None
+        if not name:
+            return
+        store = self._read_templates_store()
+        opts = self._gather_options()
+        store.setdefault('templates', {})[name] = opts
+        # 若之前无默认模板，则将第一个保存的模板设为默认
+        if not store.get('default'):
+            store['default'] = name
+        self._write_templates_store(store)
+        self._refresh_template_combo()
+        self.status_var.set(f"模板已保存：{name}")
+
+    def _load_selected_template(self):
+        name = self.template_choice_var.get().strip()
+        if not name:
+            return
+        store = self._read_templates_store()
+        tpl = store.get('templates', {}).get(name)
+        if not tpl:
+            return
+        self._apply_options(tpl)
+        self.status_var.set(f"模板已加载：{name}")
+
+    def _delete_selected_template(self):
+        name = self.template_choice_var.get().strip()
+        if not name:
+            return
+        store = self._read_templates_store()
+        if name in store.get('templates', {}):
+            del store['templates'][name]
+            if store.get('default') == name:
+                store['default'] = None
+            self._write_templates_store(store)
+            self._refresh_template_combo()
+            self.status_var.set(f"模板已删除：{name}")
+
+    def _set_default_template(self):
+        name = self.template_choice_var.get().strip()
+        if not name:
+            return
+        store = self._read_templates_store()
+        if name in store.get('templates', {}):
+            store['default'] = name
+            self._write_templates_store(store)
+            self.status_var.set(f"已设为默认模板：{name}")
+
+    def _load_last_settings_or_default(self):
+        # 尝试加载最近设置
+        try:
+            import json
+            if self._last_settings_path.exists():
+                with open(self._last_settings_path, 'r', encoding='utf-8') as f:
+                    last = json.load(f)
+                if isinstance(last, dict):
+                    self._apply_options(last)
+                    return
+        except Exception:
+            pass
+        # 否则加载默认模板
+        store = self._read_templates_store()
+        default_name = store.get('default')
+        if default_name:
+            tpl = store.get('templates', {}).get(default_name)
+            if isinstance(tpl, dict):
+                self._apply_options(tpl)
+
+    def _on_close(self):
+        # 保存最近设置
+        try:
+            import json
+            opts = self._gather_options()
+            with open(self._last_settings_path, 'w', encoding='utf-8') as f:
+                json.dump(opts, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
 
     def _on_canvas_configure(self, event):
         self.canvas.itemconfig(self.list_window, width=event.width)
@@ -569,6 +718,68 @@ class WatermarkGUI:
             'use_manual_position': bool(self._has_manual),
             'manual_pos_rel': self.manual_pos_rel,
         }
+
+    def _apply_options(self, opts: dict):
+        # 将字典中的值填回控件（若缺失则跳过）
+        try:
+            # 输出设置
+            if 'output_dir' in opts: self.output_dir_var.set(opts['output_dir'] or '')
+            if 'allow_same_dir' in opts: self.allow_same_dir_var.set(bool(opts['allow_same_dir']))
+            if 'output_format' in opts:
+                self.format_var.set(opts['output_format'] or 'auto')
+            if 'jpeg_quality' in opts:
+                self.quality_scale.set(int(opts['jpeg_quality']))
+                if hasattr(self, 'quality_label'):
+                    self.quality_label.config(text=str(int(opts['jpeg_quality'])))
+            if 'name_prefix' in opts: self.prefix_var.set(opts['name_prefix'] or '')
+            if 'name_suffix' in opts: self.suffix_var.set(opts['name_suffix'] or '')
+
+            # 尺寸
+            if 'resize_width' in opts: self.resize_w_var.set('' if opts['resize_width'] is None else str(opts['resize_width']))
+            if 'resize_height' in opts: self.resize_h_var.set('' if opts['resize_height'] is None else str(opts['resize_height']))
+            if 'resize_percent' in opts:
+                rp = opts['resize_percent']
+                self.resize_p_var.set('' if rp is None else (str(int(rp)) if float(rp).is_integer() else str(rp)))
+
+            # EXIF 文本
+            if 'font_size' in opts: self.font_size_var.set(int(opts['font_size']))
+            if 'color' in opts: self.color_var.set(opts['color'] or 'white')
+            if 'position' in opts: self.position_var.set(opts['position'] or 'bottom-right')
+
+            # 文本水印
+            if 'text_content' in opts: self.text_content_var.set(opts['text_content'] or '')
+            if 'text_font_size' in opts: self.text_font_size_var.set(int(opts['text_font_size']))
+            if 'text_color' in opts: self.text_color_var.set(opts['text_color'] or 'white')
+            if 'text_opacity' in opts: self.text_opacity_scale.set(int(opts['text_opacity']))
+            if 'font_path' in opts: self.font_path_var.set(opts['font_path'] or '')
+            if 'text_stroke_width' in opts: self.stroke_width_var.set(int(opts['text_stroke_width']))
+            if 'text_stroke_color' in opts: self.stroke_color_var.set(opts['text_stroke_color'] or 'black')
+            if 'text_shadow' in opts: self.shadow_var.set(bool(opts['text_shadow']))
+            if 'text_shadow_offset' in opts: self.shadow_offset_var.set(int(opts['text_shadow_offset']))
+            if 'text_shadow_color' in opts: self.shadow_color_var.set(opts['text_shadow_color'] or 'black')
+            if 'text_shadow_opacity' in opts: self.shadow_opacity_scale.set(int(opts['text_shadow_opacity']))
+
+            # 图片水印
+            if 'logo_path' in opts: self.logo_path_var.set(opts['logo_path'] or '')
+            if 'logo_scale_percent' in opts:
+                lsp = opts['logo_scale_percent']
+                self.logo_scale_var.set('' if lsp is None else (str(int(lsp)) if float(lsp).is_integer() else str(lsp)))
+            if 'logo_width' in opts: self.logo_w_var.set('' if opts['logo_width'] is None else str(opts['logo_width']))
+            if 'logo_height' in opts: self.logo_h_var.set('' if opts['logo_height'] is None else str(opts['logo_height']))
+            if 'logo_opacity' in opts: self.logo_opacity_scale.set(int(opts['logo_opacity']))
+
+            # 变换
+            if 'rotation_angle' in opts: self.rotation_scale.set(int(opts['rotation_angle']))
+
+            # 手动坐标
+            if 'use_manual_position' in opts: self._has_manual = bool(opts['use_manual_position'])
+            if 'manual_pos_rel' in opts and isinstance(opts['manual_pos_rel'], (list, tuple)) and len(opts['manual_pos_rel']) == 2:
+                self.manual_pos_rel = (float(opts['manual_pos_rel'][0]), float(opts['manual_pos_rel'][1]))
+
+            # 应用后刷新预览
+            self.update_preview()
+        except Exception:
+            pass
 
     # ------- 实时预览 -------
     def _bind_live_updates(self):
