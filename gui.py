@@ -75,7 +75,7 @@ class WatermarkGUI:
         right = ttk.Frame(main)
         right.pack(side=tk.RIGHT, fill=tk.Y)
         # 默认始终添加 EXIF 文本；下方可选添加自定义文本与Logo
-        wm_group = ttk.LabelFrame(right, text="水印")
+        wm_group = ttk.LabelFrame(right, text="EXIF 水印")
         wm_group.pack(fill=tk.X, padx=10, pady=8)
         ttk.Label(wm_group, text="默认会添加 EXIF 时间文本。可选：再添加自定义文本与图片Logo。").pack(anchor=tk.W)
 
@@ -86,6 +86,10 @@ class WatermarkGUI:
         tr = ttk.Frame(text_group); tr.pack(fill=tk.X, pady=4)
         ttk.Label(tr, text="文本:").pack(side=tk.LEFT)
         ttk.Entry(tr, textvariable=self.text_content_var, width=28).pack(side=tk.LEFT, padx=4)
+        tsz = ttk.Frame(text_group); tsz.pack(fill=tk.X, pady=4)
+        ttk.Label(tsz, text="字体大小:").pack(side=tk.LEFT)
+        self.text_font_size_var = tk.IntVar(value=24)
+        ttk.Spinbox(tsz, from_=8, to=128, textvariable=self.text_font_size_var, width=6).pack(side=tk.LEFT, padx=4)
         tc = ttk.Frame(text_group); tc.pack(fill=tk.X, pady=4)
         ttk.Label(tc, text="颜色:").pack(side=tk.LEFT)
         self.text_color_var = tk.StringVar(value='white')
@@ -124,8 +128,8 @@ class WatermarkGUI:
         self.shadow_opacity_scale.set(60)
         self.shadow_opacity_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
 
-        # 图片水印设置（Logo 尺寸为水印尺寸）
-        logo_group = ttk.LabelFrame(right, text="图片水印(Logo) 尺寸 = 水印尺寸")
+        # 图片水印设置
+        logo_group = ttk.LabelFrame(right, text="图片水印")
         logo_group.pack(fill=tk.X, padx=10, pady=8)
         lr = ttk.Frame(logo_group); lr.pack(fill=tk.X, pady=4)
         ttk.Label(lr, text="Logo路径:").pack(side=tk.LEFT)
@@ -206,8 +210,8 @@ class WatermarkGUI:
         ttk.Label(dims, text="百分比(%):").pack(side=tk.LEFT)
         ttk.Entry(dims, textvariable=self.resize_p_var, width=8).pack(side=tk.LEFT, padx=4)
 
-        # 水印样式
-        style_group = ttk.LabelFrame(right, text="水印样式")
+        # EXIF 水印
+        style_group = ttk.LabelFrame(right, text="EXIF 水印")
         style_group.pack(fill=tk.X, padx=10, pady=8)
         self.font_size_var = tk.IntVar(value=24)
         self.color_var = tk.StringVar(value="white")
@@ -218,6 +222,7 @@ class WatermarkGUI:
         r2 = ttk.Frame(style_group); r2.pack(fill=tk.X, pady=4)
         ttk.Label(r2, text="颜色:").pack(side=tk.LEFT)
         ttk.Entry(r2, textvariable=self.color_var, width=12).pack(side=tk.LEFT, padx=4)
+        ttk.Button(r2, text="调色盘", command=lambda: self.pick_color(self.color_var)).pack(side=tk.LEFT)
         r3 = ttk.Frame(style_group); r3.pack(fill=tk.X, pady=4)
         ttk.Label(r3, text="位置:").pack(side=tk.LEFT)
         ttk.Combobox(r3, textvariable=self.position_var, values=['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'], state="readonly", width=14).pack(side=tk.LEFT, padx=4)
@@ -386,6 +391,7 @@ class WatermarkGUI:
                     resize_height=opts['resize_height'],
                     resize_percent=opts['resize_percent'],
                     text_content=opts['text_content'],
+                    text_font_size=opts['text_font_size'],
                     text_color=opts['text_color'],
                     text_opacity=opts['text_opacity'],
                     font_path=opts['font_path'],
@@ -434,6 +440,7 @@ class WatermarkGUI:
             'resize_height': rh_i,
             'resize_percent': rp_f,
             'font_size': int(self.font_size_var.get()),
+            'text_font_size': int(self.text_font_size_var.get()),
             'color': self.color_var.get().strip() or 'white',
             'position': self.position_var.get(),
             'text_content': self.text_content_var.get().strip() or None,

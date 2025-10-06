@@ -66,7 +66,7 @@ class PhotoWatermark:
     def add_watermark(self, image_path, output_path, font_size=24, color='white', position='bottom-right',
                       output_format=None, jpeg_quality=95,
                       resize_width=None, resize_height=None, resize_percent=None,
-                      text_content=None, text_color='white', text_opacity=100,
+                      text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                       font_path=None, text_stroke_width=0, text_stroke_color='black',
                       text_shadow=False, text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
                       logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
@@ -100,38 +100,78 @@ class PhotoWatermark:
                         img = img.convert('RGB')
                 draw = ImageDraw.Draw(img)
                 
-                # 1) 默认始终添加 EXIF 时间文本（使用基本样式: color/font_size/无描边阴影）
+                # 规划线性输出：EXIF -> 文本 -> 图片，按位置锚点堆叠
                 exif_text = self.get_watermark_text(image_path)
                 base_font = self.get_font(font_size)
-                bbox = draw.textbbox((0, 0), exif_text, font=base_font)
-                tw = bbox[2] - bbox[0]
-                th = bbox[3] - bbox[1]
-                bx, by = self.calculate_position(img.width, img.height, tw, th, position)
-                draw.text((bx, by), exif_text, fill=color, font=base_font)
+                exif_bbox = draw.textbbox((0, 0), exif_text, font=base_font)
+                exif_w = exif_bbox[2] - exif_bbox[0]
+                exif_h = exif_bbox[3] - exif_bbox[1]
 
-                # 2) 可选：自定义文本水印
-                if text_content:
-                    cfont = self.get_font(font_size) if not font_path else self.load_font(font_path, font_size)
-                    cbbox = draw.textbbox((0, 0), text_content, font=cfont, stroke_width=max(0, int(text_stroke_width)))
-                    ctw = cbbox[2] - cbbox[0]
-                    cth = cbbox[3] - cbbox[1]
-                    cx, cy = self.calculate_position(img.width, img.height, ctw, cth, position)
-                    self.draw_text_with_style(img, (cx, cy), text_content, cfont,
-                                              fill_color=text_color, opacity=text_opacity,
-                                              stroke_width=text_stroke_width, stroke_color=text_stroke_color,
-                                              shadow=text_shadow, shadow_offset=text_shadow_offset,
-                                              shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity)
+                custom_font = None
+                custom_w = custom_h = 0
+                has_custom = bool(text_content)
+                if has_custom:
+                    csz = int(text_font_size) if text_font_size else font_size
+                    custom_font = self.get_font(csz) if not font_path else self.load_font(font_path, csz)
+                    custom_bbox = draw.textbbox((0, 0), text_content, font=custom_font, stroke_width=max(0, int(text_stroke_width)))
+                    custom_w = custom_bbox[2] - custom_bbox[0]
+                    custom_h = custom_bbox[3] - custom_bbox[1]
 
-                # 3) 可选：图片水印
+                wm_img = None
+                logo_w = logo_h = 0
                 if logo_path:
                     wm_img = self.prepare_logo(logo_path, logo_scale_percent, logo_width, logo_height, logo_opacity)
-                    if wm_img is None:
-                        raise ValueError('无法加载图片水印')
-                    wm_w, wm_h = wm_img.size
-                    lx, ly = self.calculate_position(img.width, img.height, wm_w, wm_h, position)
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    img.alpha_composite(wm_img, dest=(lx, ly))
+                    if wm_img is not None:
+                        logo_w, logo_h = wm_img.size
+
+                # 计算堆叠位置
+                margin = 20
+                spacing = 8
+                pw, ph = img.width, img.height
+
+                def anchor_x(w):
+                    if position.endswith('left'):
+                        return margin
+                    if position.endswith('right'):
+                        return pw - w - margin
+                    return (pw - w) // 2
+
+                # 垂直布局依据 position
+                blocks = []
+                # 依次添加：exif, custom text, logo(若有)
+                blocks.append(('exif', exif_w, exif_h))
+                if has_custom:
+                    blocks.append(('custom', custom_w, custom_h))
+                if wm_img is not None:
+                    blocks.append(('logo', logo_w, logo_h))
+
+                total_h = sum(h for _, _, h in blocks) + spacing * (len(blocks) - 1 if blocks else 0)
+                if position.startswith('top'):
+                    cur_y = margin
+                elif position.startswith('bottom'):
+                    cur_y = ph - margin - total_h
+                else:  # center 垂直居中
+                    cur_y = (ph - total_h) // 2
+
+                # 绘制各块
+                for kind, w, h in blocks:
+                    x = anchor_x(w)
+                    if kind == 'exif':
+                        draw.text((x, cur_y), exif_text, fill=color, font=base_font)
+                    elif kind == 'custom':
+                        self.draw_text_with_style(
+                            img, (x, cur_y), text_content, custom_font,
+                            fill_color=text_color, opacity=text_opacity,
+                            stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                            shadow=text_shadow, shadow_offset=text_shadow_offset,
+                            shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
+                        )
+                    else:  # logo
+                        if wm_img is not None:
+                            if img.mode != 'RGBA':
+                                img = img.convert('RGBA')
+                            img.alpha_composite(wm_img, dest=(x, cur_y))
+                    cur_y += h + spacing
                 
                 # 保存图片
                 fmt = (output_format or Path(output_path).suffix.lstrip('.')).lower()
@@ -185,21 +225,30 @@ class PhotoWatermark:
             return img
 
     def get_font(self, font_size):
-        """获取字体对象"""
+        """获取字体对象，跨平台健壮回退"""
         font_paths = [
-            "arial.ttf",
-            "C:/Windows/Fonts/arial.ttf",
+            # Windows 常见
             "C:/Windows/Fonts/msyh.ttf",  # 微软雅黑
             "C:/Windows/Fonts/simhei.ttf",  # 黑体
+            "C:/Windows/Fonts/arial.ttf",
+            # macOS 常见
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Helvetica.ttc",
+            # Linux 常见
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            # 相对路径/当前目录可能的字体
+            "arial.ttf",
         ]
-        
+
         for font_path in font_paths:
             try:
                 return ImageFont.truetype(font_path, font_size)
-            except:
+            except Exception:
                 continue
-        
-        # 如果所有字体都加载失败，使用默认字体
+
+        # 最终回退
         return ImageFont.load_default()
 
     def load_font(self, font_path, font_size):
@@ -282,7 +331,7 @@ class PhotoWatermark:
                           output_dir=None, output_format=None, jpeg_quality=95,
                           name_prefix='', name_suffix='', forbid_export_to_input=True,
                           resize_width=None, resize_height=None, resize_percent=None,
-                          text_content=None, text_color='white', text_opacity=100,
+                          text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                           font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
                           text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
                           logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
@@ -344,6 +393,7 @@ class PhotoWatermark:
                     resize_height=resize_height,
                     resize_percent=resize_percent,
                     text_content=text_content,
+                    text_font_size=text_font_size,
                     text_color=text_color,
                     text_opacity=text_opacity,
                     font_path=font_path,
@@ -372,7 +422,7 @@ class PhotoWatermark:
                       output_format=None, jpeg_quality=95, name_prefix='', name_suffix='',
                       forbid_export_to_input=True,
                       resize_width=None, resize_height=None, resize_percent=None,
-                      text_content=None, text_color='white', text_opacity=100,
+                      text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                       font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
                       text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
                       logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
@@ -404,6 +454,7 @@ class PhotoWatermark:
                     output_format=output_format, jpeg_quality=jpeg_quality,
                     resize_width=resize_width, resize_height=resize_height, resize_percent=resize_percent,
                     text_content=text_content,
+                    text_font_size=text_font_size,
                     text_color=text_color,
                     text_opacity=text_opacity,
                     font_path=font_path,
