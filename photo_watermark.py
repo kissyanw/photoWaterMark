@@ -69,7 +69,8 @@ class PhotoWatermark:
                       text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                       font_path=None, text_stroke_width=0, text_stroke_color='black',
                       text_shadow=False, text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
-                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
+                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100,
+                      rotation_angle=0, use_manual_position=False, manual_pos_rel=None):
         """为图片添加水印并导出
 
         参数:
@@ -130,9 +131,9 @@ class PhotoWatermark:
                 pw, ph = img.width, img.height
 
                 def anchor_x(w):
-                    if position.endswith('left'):
+                    if position.endswith('left') or position == 'left':
                         return margin
-                    if position.endswith('right'):
+                    if position.endswith('right') or position == 'right':
                         return pw - w - margin
                     return (pw - w) // 2
 
@@ -153,25 +154,68 @@ class PhotoWatermark:
                 else:  # center 垂直居中
                     cur_y = (ph - total_h) // 2
 
-                # 绘制各块
+                # 绘制各块（支持整体旋转和手动定位）
+                try:
+                    rotation_angle = int(rotation_angle)
+                except Exception:
+                    rotation_angle = 0
+                manual_xy = None
+                if use_manual_position and manual_pos_rel:
+                    try:
+                        rx, ry = manual_pos_rel
+                        manual_xy = (int(rx * pw), int(ry * ph))
+                    except Exception:
+                        manual_xy = None
+
+                offset_y = 0
                 for kind, w, h in blocks:
                     x = anchor_x(w)
+                    draw_x = manual_xy[0] if manual_xy else x
+                    draw_y = (manual_xy[1] + offset_y) if manual_xy else cur_y
                     if kind == 'exif':
-                        draw.text((x, cur_y), exif_text, fill=color, font=base_font)
-                    elif kind == 'custom':
-                        self.draw_text_with_style(
-                            img, (x, cur_y), text_content, custom_font,
-                            fill_color=text_color, opacity=text_opacity,
-                            stroke_width=text_stroke_width, stroke_color=text_stroke_color,
-                            shadow=text_shadow, shadow_offset=text_shadow_offset,
-                            shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
-                        )
-                    else:  # logo
-                        if wm_img is not None:
+                        if rotation_angle:
+                            layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+                            ImageDraw.Draw(layer).text((0, 0), exif_text, fill=color, font=base_font)
+                            layer = layer.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
                             if img.mode != 'RGBA':
                                 img = img.convert('RGBA')
-                            img.alpha_composite(wm_img, dest=(x, cur_y))
-                    cur_y += h + spacing
+                            img.alpha_composite(layer, dest=(draw_x, draw_y))
+                        else:
+                            draw.text((draw_x, draw_y), exif_text, fill=color, font=base_font)
+                    elif kind == 'custom':
+                        if rotation_angle:
+                            bbox_img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+                            self.draw_text_with_style(
+                                bbox_img, (0, 0), text_content, custom_font,
+                                fill_color=text_color, opacity=text_opacity,
+                                stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                                shadow=text_shadow, shadow_offset=text_shadow_offset,
+                                shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
+                            )
+                            bbox_img = bbox_img.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
+                            if img.mode != 'RGBA':
+                                img = img.convert('RGBA')
+                            img.alpha_composite(bbox_img, dest=(draw_x, draw_y))
+                        else:
+                            self.draw_text_with_style(
+                                img, (draw_x, draw_y), text_content, custom_font,
+                                fill_color=text_color, opacity=text_opacity,
+                                stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                                shadow=text_shadow, shadow_offset=text_shadow_offset,
+                                shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
+                            )
+                    else:  # logo
+                        if wm_img is not None:
+                            logo_to_paste = wm_img
+                            if rotation_angle:
+                                logo_to_paste = wm_img.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
+                            if img.mode != 'RGBA':
+                                img = img.convert('RGBA')
+                            img.alpha_composite(logo_to_paste, dest=(draw_x, draw_y))
+                    if manual_xy:
+                        offset_y += h + spacing
+                    else:
+                        cur_y += h + spacing
                 
                 # 保存图片
                 fmt = (output_format or Path(output_path).suffix.lstrip('.')).lower()
@@ -334,7 +378,8 @@ class PhotoWatermark:
                           text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                           font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
                           text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
-                          logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
+                          logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100,
+                          rotation_angle=0, use_manual_position=False, manual_pos_rel=None):
         """处理目录中的所有图片"""
         input_path = Path(input_dir)
         if not input_path.exists():
@@ -408,6 +453,9 @@ class PhotoWatermark:
                     logo_width=logo_width,
                     logo_height=logo_height,
                     logo_opacity=logo_opacity,
+                    rotation_angle=rotation_angle,
+                    use_manual_position=use_manual_position,
+                    manual_pos_rel=manual_pos_rel,
                 )
                 if ok:
                     success_count += 1
@@ -425,7 +473,8 @@ class PhotoWatermark:
                       text_content=None, text_font_size=None, text_color='white', text_opacity=100,
                       font_path=None, text_stroke_width=0, text_stroke_color='black', text_shadow=False,
                       text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
-                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100):
+                      logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100,
+                      rotation_angle=0, use_manual_position=False, manual_pos_rel=None):
         """处理一组指定文件（用于GUI批量导入）"""
         files = [Path(p) for p in files]
         if not files:
@@ -469,6 +518,9 @@ class PhotoWatermark:
                     logo_width=logo_width,
                     logo_height=logo_height,
                     logo_opacity=logo_opacity,
+                    rotation_angle=rotation_angle,
+                    use_manual_position=use_manual_position,
+                    manual_pos_rel=manual_pos_rel,
                 )
                 if ok:
                     success_count += 1
@@ -483,6 +535,132 @@ class PhotoWatermark:
         if ext == 'jpg':
             ext = 'jpeg'
         return f"{prefix}{stem}{suffix}.{ext}"
+
+    # 预览用：对已有 PIL.Image 应用水印（不保存）
+    def add_watermark_to_image(self, image, image_path, font_size=24, color='white', position='bottom-right',
+                               text_content=None, text_font_size=None, text_color='white', text_opacity=100,
+                               font_path=None, text_stroke_width=0, text_stroke_color='black',
+                               text_shadow=False, text_shadow_offset=2, text_shadow_color='black', text_shadow_opacity=60,
+                               logo_path=None, logo_scale_percent=None, logo_width=None, logo_height=None, logo_opacity=100,
+                               rotation_angle=0, use_manual_position=False, manual_xy=None):
+        try:
+            img = image.copy()
+            has_alpha = (img.mode in ('RGBA', 'LA')) or ('transparency' in img.info)
+            if has_alpha:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+            else:
+                if img.mode not in ('RGB', 'RGBA'):
+                    img = img.convert('RGB')
+            draw = ImageDraw.Draw(img)
+
+            exif_text = self.get_watermark_text(image_path)
+            base_font = self.get_font(font_size)
+            exif_bbox = draw.textbbox((0, 0), exif_text, font=base_font)
+            exif_w = exif_bbox[2] - exif_bbox[0]
+            exif_h = exif_bbox[3] - exif_bbox[1]
+
+            custom_font = None
+            custom_w = custom_h = 0
+            has_custom = bool(text_content)
+            if has_custom:
+                csz = int(text_font_size) if text_font_size else font_size
+                custom_font = self.get_font(csz) if not font_path else self.load_font(font_path, csz)
+                custom_bbox = draw.textbbox((0, 0), text_content, font=custom_font, stroke_width=max(0, int(text_stroke_width)))
+                custom_w = custom_bbox[2] - custom_bbox[0]
+                custom_h = custom_bbox[3] - custom_bbox[1]
+
+            wm_img = None
+            logo_w = logo_h = 0
+            if logo_path:
+                wm_img = self.prepare_logo(logo_path, logo_scale_percent, logo_width, logo_height, logo_opacity)
+                if wm_img is not None:
+                    logo_w, logo_h = wm_img.size
+
+            margin = 20
+            spacing = 8
+            pw, ph = img.width, img.height
+
+            def anchor_x(w):
+                if position.endswith('left') or position == 'left':
+                    return margin
+                if position.endswith('right') or position == 'right':
+                    return pw - w - margin
+                return (pw - w) // 2
+
+            blocks = []
+            blocks.append(('exif', exif_w, exif_h))
+            if has_custom:
+                blocks.append(('custom', custom_w, custom_h))
+            if wm_img is not None:
+                blocks.append(('logo', logo_w, logo_h))
+
+            total_h = sum(h for _, _, h in blocks) + spacing * (len(blocks) - 1 if blocks else 0)
+            if position.startswith('top'):
+                cur_y = margin
+            elif position.startswith('bottom'):
+                cur_y = ph - margin - total_h
+            else:
+                cur_y = (ph - total_h) // 2
+
+            try:
+                rotation_angle = int(rotation_angle)
+            except Exception:
+                rotation_angle = 0
+
+            offset_y = 0
+            for kind, w, h in blocks:
+                x = anchor_x(w)
+                draw_x = manual_xy[0] if (manual_xy and use_manual_position) else x
+                draw_y = (manual_xy[1] + offset_y) if (manual_xy and use_manual_position) else cur_y
+                if kind == 'exif':
+                    if rotation_angle:
+                        layer = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+                        ImageDraw.Draw(layer).text((0, 0), exif_text, fill=color, font=base_font)
+                        layer = layer.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
+                        if img.mode != 'RGBA':
+                            img = img.convert('RGBA')
+                        img.alpha_composite(layer, dest=(draw_x, draw_y))
+                    else:
+                        draw.text((draw_x, draw_y), exif_text, fill=color, font=base_font)
+                elif kind == 'custom':
+                    if rotation_angle:
+                        bbox_img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+                        self.draw_text_with_style(
+                            bbox_img, (0, 0), text_content, custom_font,
+                            fill_color=text_color, opacity=text_opacity,
+                            stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                            shadow=text_shadow, shadow_offset=text_shadow_offset,
+                            shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
+                        )
+                        bbox_img = bbox_img.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
+                        if img.mode != 'RGBA':
+                            img = img.convert('RGBA')
+                        img.alpha_composite(bbox_img, dest=(draw_x, draw_y))
+                    else:
+                        self.draw_text_with_style(
+                            img, (draw_x, draw_y), text_content, custom_font,
+                            fill_color=text_color, opacity=text_opacity,
+                            stroke_width=text_stroke_width, stroke_color=text_stroke_color,
+                            shadow=text_shadow, shadow_offset=text_shadow_offset,
+                            shadow_color=text_shadow_color, shadow_opacity=text_shadow_opacity
+                        )
+                else:
+                    if wm_img is not None:
+                        logo_to_paste = wm_img
+                        if rotation_angle:
+                            logo_to_paste = wm_img.rotate(rotation_angle, expand=True, resample=Image.BICUBIC)
+                        if img.mode != 'RGBA':
+                            img = img.convert('RGBA')
+                        img.alpha_composite(logo_to_paste, dest=(draw_x, draw_y))
+                if (manual_xy and use_manual_position):
+                    offset_y += h + spacing
+                else:
+                    cur_y += h + spacing
+
+            return img
+        except Exception:
+            return image
 
 
 def main():

@@ -39,23 +39,45 @@ class WatermarkGUI:
         self._bind_dnd_if_available()
 
     def _build_layout(self):
-        main = ttk.Frame(self.root)
-        main.pack(fill=tk.BOTH, expand=True)
+        # 使用可分割面板，左右可拖拽调整
+        self.paned = ttk.Panedwindow(self.root, orient=tk.HORIZONTAL)
+        self.paned.pack(fill=tk.BOTH, expand=True)
 
-        # 左侧：文件区（拖拽/列表/按钮）
-        left = ttk.Frame(main, width=560)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        # 左侧：预览 + 文件区（拖拽/列表/按钮）
+        left = ttk.Frame(self.paned)
+        self.paned.add(left, weight=2)
         left.pack_propagate(False)
 
-        hint = ttk.Label(left, text=(
-            "将图片或文件夹拖拽到此区域，或使用下方按钮添加\n"
+        # 预览区域
+        # 左侧内部使用水平分割：左侧预览，右侧工作栏（列表/按钮）
+        self.lpane = ttk.Panedwindow(left, orient=tk.HORIZONTAL)
+        self.lpane.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        prev_wrap = ttk.Frame(self.lpane)
+        self.lpane.add(prev_wrap, weight=1)
+        work_panel = ttk.Frame(self.lpane)
+        self.lpane.add(work_panel, weight=1)
+        ttk.Label(prev_wrap, text="预览（可拖拽水印）").pack(anchor=tk.W)
+        self.preview_canvas = tk.Canvas(prev_wrap, width=540, height=360, bg="#333", highlightthickness=1, highlightbackground="#ddd")
+        self.preview_canvas.pack(fill=tk.BOTH, expand=True)
+        self.preview_canvas.bind("<Button-1>", self._on_preview_mouse_down)
+        self.preview_canvas.bind("<B1-Motion>", self._on_preview_mouse_drag)
+        self.preview_canvas.bind("<ButtonRelease-1>", self._on_preview_mouse_up)
+        self._dragging = False
+        self._last_preview_tk = None  # PhotoImage for canvas
+        self.selected_file = None
+        self.manual_pos_rel = (0.0, 0.0)  # 相对坐标(0-1)，始终可拖动
+        self._has_manual = False  # 是否使用手动定位（拖动后生效，选择预设则清空）
+        self._preview_box = None  # (x0, y0, w, h) 图像在画布中的区域
+
+        hint = ttk.Label(work_panel, text=(
+            "将图片或文件夹拖拽到下方列表，或使用按钮添加\n"
             f"支持格式：{', '.join(sorted(e.upper().lstrip('.') for e in SUPPORTED_EXTS))}"
         ))
-        hint.pack(pady=8)
+        hint.pack(pady=4)
 
         # 可滚动缩略图容器
-        self.canvas = tk.Canvas(left, borderwidth=0, highlightthickness=1, highlightbackground="#ddd")
-        self.scroll = ttk.Scrollbar(left, orient=tk.VERTICAL, command=self.canvas.yview)
+        self.canvas = tk.Canvas(work_panel, borderwidth=0, highlightthickness=1, highlightbackground="#ddd")
+        self.scroll = ttk.Scrollbar(work_panel, orient=tk.VERTICAL, command=self.canvas.yview)
         self.canvas.configure(yscrollcommand=self.scroll.set)
         self.list_frame = ttk.Frame(self.canvas)
         self.list_window = self.canvas.create_window((0, 0), window=self.list_frame, anchor="nw")
@@ -65,15 +87,33 @@ class WatermarkGUI:
         self.list_frame.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-        btn_bar = ttk.Frame(left)
+        btn_bar = ttk.Frame(work_panel)
         btn_bar.pack(fill=tk.X, pady=8)
         ttk.Button(btn_bar, text="添加文件", command=self.add_files_dialog).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_bar, text="添加文件夹", command=self.add_folder_dialog).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_bar, text="清空列表", command=self.clear_files).pack(side=tk.LEFT, padx=4)
 
         # 右侧：设置区
-        right = ttk.Frame(main)
-        right.pack(side=tk.RIGHT, fill=tk.Y)
+        # 右侧改为可滚动面板，置于分割面板右侧
+        right_wrap = ttk.Frame(self.paned)
+        self.paned.add(right_wrap, weight=1)
+        right_canvas = tk.Canvas(right_wrap, borderwidth=0, highlightthickness=0)
+        right_scroll = ttk.Scrollbar(right_wrap, orient=tk.VERTICAL, command=right_canvas.yview)
+        right_canvas.configure(yscrollcommand=right_scroll.set)
+        right_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        right = ttk.Frame(right_canvas)
+        self._right_window = right_canvas.create_window((0, 0), window=right, anchor="nw")
+        def _on_right_config(event):
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+            # 固定右侧面板宽度
+            right_canvas.itemconfig(self._right_window, width=event.width)
+        right.bind("<Configure>", _on_right_config)
+        def _on_right_canvas(event):
+            right_canvas.configure(scrollregion=right_canvas.bbox("all"))
+            # 让右侧随父容器分配的宽度伸缩，不再强制最小宽度
+            right_canvas.itemconfig(self._right_window, width=event.width)
+        right_canvas.bind("<Configure>", _on_right_canvas)
         # 默认始终添加 EXIF 文本；下方可选添加自定义文本与Logo
         wm_group = ttk.LabelFrame(right, text="EXIF 水印")
         wm_group.pack(fill=tk.X, padx=10, pady=8)
@@ -225,7 +265,31 @@ class WatermarkGUI:
         ttk.Button(r2, text="调色盘", command=lambda: self.pick_color(self.color_var)).pack(side=tk.LEFT)
         r3 = ttk.Frame(style_group); r3.pack(fill=tk.X, pady=4)
         ttk.Label(r3, text="位置:").pack(side=tk.LEFT)
-        ttk.Combobox(r3, textvariable=self.position_var, values=['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'], state="readonly", width=14).pack(side=tk.LEFT, padx=4)
+        ttk.Combobox(r3, textvariable=self.position_var, values=['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'], state="readonly", width=14).pack(side=tk.LEFT, padx=4)
+        # 九宫格快捷按钮
+        grid = ttk.Frame(style_group); grid.pack(fill=tk.X, pady=4)
+        def set_pos(p):
+            self.position_var.set(p)
+            self._has_manual = False
+            self.update_preview()
+        for row, labels in enumerate([
+            ['top-left', 'top', 'top-right'],
+            ['left', 'center', 'right'],
+            ['bottom-left', 'bottom', 'bottom-right']
+        ]):
+            fr = ttk.Frame(grid); fr.pack()
+            for lab in labels:
+                ttk.Button(fr, text=lab, width=10, command=lambda v=lab: set_pos(v)).pack(side=tk.LEFT, padx=2)
+
+        # 旋转控制
+        rot_group = ttk.LabelFrame(right, text="变换")
+        rot_group.pack(fill=tk.X, padx=10, pady=8)
+        rr = ttk.Frame(rot_group); rr.pack(fill=tk.X, pady=4)
+        ttk.Label(rr, text="旋转(°):").pack(side=tk.LEFT)
+        self.rotation_var = tk.IntVar(value=0)
+        self.rotation_scale = ttk.Scale(rr, from_=-180, to=180, orient=tk.HORIZONTAL, command=lambda v: self.update_preview())
+        self.rotation_scale.set(0)
+        self.rotation_scale.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
 
         # 操作
         action = ttk.Frame(right)
@@ -235,6 +299,39 @@ class WatermarkGUI:
 
         self.status_var = tk.StringVar(value="就绪")
         ttk.Label(right, textvariable=self.status_var).pack(anchor=tk.W, padx=12)
+
+        # 绑定值变化实时预览
+        self._bind_live_updates()
+        # 窗口尺寸变化时重绘预览
+        try:
+            self.root.bind('<Configure>', lambda e: self.update_preview())
+        except Exception:
+            pass
+        # 初始设置分割条位置：预览canvas、工作区、工具栏三等分
+        # 分两步进行：先设置主分割，再在尺寸刷新后设置左侧内部的分割
+        def _set_main_split():
+            try:
+                self.root.update_idletasks()
+                pw = max(1, self.paned.winfo_width())
+                # 主分割：左侧(预览+工作区)=2/3，右侧(工具栏)=1/3
+                self.paned.sashpos(0, int(pw * (2/3)))
+            except Exception:
+                pass
+
+        def _set_left_split():
+            try:
+                self.root.update_idletasks()
+                lw = max(1, self.lpane.winfo_width())
+                # 左侧次分割：预览 与 工作区 各 1/2（总体各 1/3）
+                self.lpane.sashpos(0, int(lw * 0.5))
+            except Exception:
+                pass
+
+        # 设定为 1:1:1：先设主分割到 2/3，再在下一帧与稍后各设一次左分割为 1/2
+        self.root.after_idle(_set_main_split)
+        self.root.after(10, _set_left_split)
+        self.root.after(120, _set_main_split)
+        self.root.after(130, _set_left_split)
 
     def _bind_dnd_if_available(self):
         if not DND_AVAILABLE:
@@ -306,7 +403,13 @@ class WatermarkGUI:
 
         # 文件名
         name = os.path.basename(path)
-        ttk.Label(item, text=name).pack(side=tk.LEFT, padx=8)
+        lab = ttk.Label(item, text=name)
+        lab.pack(side=tk.LEFT, padx=8)
+        def on_select(*_):
+            self.selected_file = path
+            self.update_preview()
+        item.bind("<Button-1>", on_select)
+        lab.bind("<Button-1>", on_select)
 
         # 删除按钮
         ttk.Button(item, text="移除", command=lambda: self._remove_item(item, path)).pack(side=tk.RIGHT)
@@ -376,6 +479,7 @@ class WatermarkGUI:
 
         def run():
             try:
+                # 计算导出时的手动相对坐标直接传递
                 self.watermark.process_files(
                     files=self.files,
                     output_dir=opts['output_dir'],
@@ -406,6 +510,9 @@ class WatermarkGUI:
                     logo_width=opts['logo_width'],
                     logo_height=opts['logo_height'],
                     logo_opacity=opts['logo_opacity'],
+                    rotation_angle=opts['rotation_angle'],
+                    use_manual_position=opts['use_manual_position'],
+                    manual_pos_rel=opts['manual_pos_rel'],
                 )
                 self.status_var.set("处理完成")
                 messagebox.showinfo("完成", "导出完成！")
@@ -458,7 +565,124 @@ class WatermarkGUI:
             'logo_width': int(self.logo_w_var.get()) if self.logo_w_var.get().strip().isdigit() else None,
             'logo_height': int(self.logo_h_var.get()) if self.logo_h_var.get().strip().isdigit() else None,
             'logo_opacity': int(self.logo_opacity_scale.get()),
+            'rotation_angle': int(float(self.rotation_scale.get())),
+            'use_manual_position': bool(self._has_manual),
+            'manual_pos_rel': self.manual_pos_rel,
         }
+
+    # ------- 实时预览 -------
+    def _bind_live_updates(self):
+        def bind_var(var):
+            if hasattr(var, 'trace_add'):
+                var.trace_add('write', lambda *a: self.update_preview())
+        for v in [self.text_content_var, self.text_color_var, self.font_path_var, self.stroke_color_var, self.shadow_color_var,
+                  self.logo_path_var, self.logo_scale_var, self.logo_w_var, self.logo_h_var, self.prefix_var, self.suffix_var,
+                  self.resize_w_var, self.resize_h_var, self.resize_p_var, self.color_var, self.position_var]:
+            bind_var(v)
+        # Scales don't use trace; we already bound rotation and opacity labels; bind update
+        self.text_opacity_scale.configure(command=lambda v: self.update_preview())
+        self.shadow_opacity_scale.configure(command=lambda v: self.update_preview())
+        self.logo_opacity_scale.configure(command=lambda v: self.update_preview())
+
+    def _on_preview_mouse_down(self, event):
+        self._dragging = True
+        self._has_manual = True
+        self._update_manual_pos_from_canvas(event.x, event.y)
+
+    def _on_preview_mouse_drag(self, event):
+        if not self._dragging:
+            return
+        self._update_manual_pos_from_canvas(event.x, event.y)
+
+    def _on_preview_mouse_up(self, event):
+        self._dragging = False
+
+    def _update_manual_pos_from_canvas(self, cx, cy):
+        # 转为图像内容内的相对坐标
+        if not self._preview_box:
+            return
+        x0, y0, iw, ih = self._preview_box
+        rx = max(0.0, min(1.0, (cx - x0) / max(1, iw)))
+        ry = max(0.0, min(1.0, (cy - y0) / max(1, ih)))
+        self.manual_pos_rel = (rx, ry)
+        self.update_preview()
+
+
+    def update_preview(self):
+        if not self.selected_file:
+            self.preview_canvas.delete("all")
+            return
+        # 构造参数并渲染
+        opts = self._gather_options()
+        try:
+            # 按导出尺寸逻辑先对原图缩放
+            im = Image.open(self.selected_file)
+            # 应用导出尺寸（与导出一致）
+            rw = opts['resize_width']; rh = opts['resize_height']; rp = opts['resize_percent']
+            if rw or rh or rp:
+                try:
+                    disp_src = self.watermark.apply_resize(im, width=rw, height=rh, percent=rp)
+                except Exception:
+                    disp_src = im
+            else:
+                disp_src = im
+
+            # 再将导出图缩放以适配预览画布（等比，留边）
+            cw = int(self.preview_canvas.winfo_width()) or 540
+            ch = int(self.preview_canvas.winfo_height()) or 360
+            w, h = disp_src.size
+            scale = min(cw / w, ch / h)
+            nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+            x = (cw - nw) // 2
+            y = (ch - nh) // 2
+            base = Image.new('RGBA', (cw, ch), (51, 51, 51, 255))
+            prev_img = disp_src.resize((nw, nh), Image.LANCZOS)
+            self._preview_box = (x, y, nw, nh)
+
+            # 手动坐标换算为“缩放后图片内”的像素坐标
+            mrel = opts['manual_pos_rel'] if opts['use_manual_position'] else None
+            if mrel and self._preview_box:
+                _, _, bw, bh = self._preview_box
+                mx_img, my_img = int(mrel[0] * bw), int(mrel[1] * bh)
+            else:
+                mx_img = my_img = None
+
+            # 只在缩放后的图片上绘制水印，然后粘贴到背景
+            rendered = self.watermark.add_watermark_to_image(
+                prev_img,
+                image_path=self.selected_file,
+                font_size=opts['font_size'],
+                color=opts['color'],
+                position=opts['position'],
+                text_content=opts['text_content'],
+                text_font_size=opts['text_font_size'],
+                text_color=opts['text_color'],
+                text_opacity=opts['text_opacity'],
+                font_path=opts['font_path'],
+                text_stroke_width=opts['text_stroke_width'],
+                text_stroke_color=opts['text_stroke_color'],
+                text_shadow=opts['text_shadow'],
+                text_shadow_offset=opts['text_shadow_offset'],
+                text_shadow_color=opts['text_shadow_color'],
+                text_shadow_opacity=opts['text_shadow_opacity'],
+                logo_path=opts['logo_path'],
+                logo_scale_percent=opts['logo_scale_percent'],
+                logo_width=opts['logo_width'],
+                logo_height=opts['logo_height'],
+                logo_opacity=opts['logo_opacity'],
+                rotation_angle=opts['rotation_angle'],
+                use_manual_position=opts['use_manual_position'],
+                manual_xy=(mx_img, my_img) if mx_img is not None else None,
+            )
+            if rendered.mode != 'RGBA':
+                rendered = rendered.convert('RGBA')
+            base.alpha_composite(rendered, dest=(x, y))
+            disp = base
+            self._last_preview_tk = ImageTk.PhotoImage(disp)
+            self.preview_canvas.delete("all")
+            self.preview_canvas.create_image(0, 0, anchor=tk.NW, image=self._last_preview_tk)
+        except Exception:
+            pass
 
     def run(self):
         self.root.mainloop()
